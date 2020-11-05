@@ -1,0 +1,9 @@
+main.c:89:6:HAL_SPI_RxCpltCallback	8	static
+main.c:114:6:HAL_GPIO_EXTI_Callback	8	static
+main.c:137:7:diameter	8	static
+main.c:141:7:rotationForShoot	0	static
+main.c:145:5:targetPulseCount	0	static
+main.c:150:6:SaveWheelParam	40	static
+main.c:290:6:SystemClock_Config	160	static
+main.c:176:5:main	80	static
+main.c:344:6:Error_Handler	0	static

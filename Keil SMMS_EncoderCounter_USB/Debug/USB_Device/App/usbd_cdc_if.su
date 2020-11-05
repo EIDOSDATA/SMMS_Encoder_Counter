@@ -1,0 +1,7 @@
+stm32g4xx_ll_tim.h:1943:22:LL_TIM_EnableCounter	16	static
+stm32g4xx_ll_tim.h:5364:22:LL_TIM_ClearFlag_UPDATE	16	static
+usbd_cdc_if.c:175:15:CDC_Init_FS	8	static
+usbd_cdc_if.c:189:15:CDC_DeInit_FS	4	static
+usbd_cdc_if.c:203:15:CDC_Control_FS	16	static
+usbd_cdc_if.c:283:15:CDC_Receive_FS	24	static
+usbd_cdc_if.c:381:9:CDC_Transmit_FS	24	static
