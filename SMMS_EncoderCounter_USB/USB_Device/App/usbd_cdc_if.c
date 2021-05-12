@@ -119,7 +119,8 @@ uint8_t UserRxBufferFS[APP_RX_DATA_SIZE];
 uint8_t UserTxBufferFS[APP_TX_DATA_SIZE];
 
 /* USER CODE BEGIN PRIVATE_VARIABLES */
-
+static USBD_CDC_LineCodingTypeDef linecoding =
+{ 115200, 0, 0, 8 };
 /* USER CODE END PRIVATE_VARIABLES */
 
 /**
@@ -243,11 +244,11 @@ static int8_t CDC_Control_FS(uint8_t cmd, uint8_t* pbuf, uint16_t length)
 		/* 6      | bDataBits  |   1   | Number Data bits (5, 6, 7, 8 or 16).          */
 		/*******************************************************************************/
 	case CDC_SET_LINE_CODING:
-
+		memcpy(&linecoding, pbuf, sizeof(linecoding));
 		break;
 
 	case CDC_GET_LINE_CODING:
-
+		memcpy(pbuf, &linecoding, sizeof(linecoding));
 		break;
 
 	case CDC_SET_CONTROL_LINE_STATE:
@@ -309,7 +310,7 @@ static int8_t CDC_Receive_FS(uint8_t* Buf, uint32_t *Len)
 			break;
 		case 'F':
 		case 'f':
-			//즉발성이 필요하므로 코드를 여기에 작성한다.
+			//즉발?��?�� ?��?��?���?�? 코드�? ?��기에 ?��?��?��?��.
 			HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, SET);
 			LL_TIM_ClearFlag_UPDATE(TIM3);
 			LL_TIM_EnableCounter(TIM3);
@@ -338,8 +339,8 @@ static int8_t CDC_Receive_FS(uint8_t* Buf, uint32_t *Len)
 			LL_TIM_ClearFlag_UPDATE(TIM3);
 			LL_TIM_EnableCounter(TIM3);
 			break;
-		default:
-			CDC_Transmit_FS((uint8_t*)helpStr, strlen(helpStr));
+		//default:
+			//CDC_Transmit_FS((uint8_t*)helpStr, strlen(helpStr));
 		}
 	}
 	else
