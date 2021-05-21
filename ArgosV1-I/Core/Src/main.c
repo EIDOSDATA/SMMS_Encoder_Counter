@@ -17,10 +17,11 @@
  ******************************************************************************
  */
 /* USER CODE END Header */
+
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
+#include "spi.h"
 #include "tim.h"
-#include "usb_device.h"
 #include "gpio.h"
 
 /* Private includes ----------------------------------------------------------*/
@@ -28,16 +29,17 @@
 #include <stdio.h>
 #include <stdbool.h>
 #include <string.h>
+#include <stdlib.h>
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
-typedef struct _paramType
-{
-	uint32_t encoderPulseCount;
-	float wheelRadius;
-	float targetDistance;
+typedef struct _paramType {
+	float wheelRadius; // 1
+	uint32_t encoderPulseCount; // 2
+	float targetDistance; // 3
 } __attribute__((aligned(1), packed)) WheelParam;
+WheelParam wP;
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
@@ -59,15 +61,16 @@ typedef struct _paramType
 /* Private variables ---------------------------------------------------------*/
 
 /* USER CODE BEGIN PV */
+SPI_HandleTypeDef hspi1;
 int A_PLS_CNT = 0;
 int B_PLS_CNT = 0;
 
 bool bFlag = false;
-uint8_t xFlag = 0;
-uint8_t lineFlag = 0;
-extern char rxbuf[200];
-char txbuf[300];
+uint8_t saveFlag = 0; // Data select
 
+int goFlag = 0;
+char spirxbuf[20] = { 0 };
+int encoderTargetCount = -1;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -78,23 +81,27 @@ void SystemClock_Config(void);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
-{
-	switch (GPIO_Pin)
-	{
+
+void HAL_SPI_RxCpltCallback(SPI_HandleTypeDef *hspi) {
+	if (hspi->Instance == hspi1.Instance) {
+		HAL_SPI_Receive_IT(&hspi1, (uint8_t*) &wP, sizeof(wP));
+		goFlag = 1;
+	}
+}
+
+void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin) {
+	switch (GPIO_Pin) {
 	case GPIO_PIN_5:
 		HAL_GPIO_TogglePin(GPIOF, GPIO_PIN_0);
-		if (bFlag)
-		{
+		//if (bFlag) {
 			A_PLS_CNT++;
-		}
+		//}
 		break;
 	case GPIO_PIN_6:
 		HAL_GPIO_TogglePin(GPIOF, GPIO_PIN_1);
-		if (bFlag)
-		{
+		//if (bFlag) {
 			B_PLS_CNT++;
-		}
+		//}
 		break;
 	case GPIO_PIN_7:
 		HAL_GPIO_TogglePin(GPIOB, GPIO_PIN_8);
@@ -105,24 +112,20 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
 	//HAL_GPIO_WritePin(GPIOB,GPIO_PIN_0,RESET);
 }
 
-float diameter(float radius)
-{
+float diameter(float radius) {
 	return (2 * 3.1415 * radius);
 }
 
-float rotationForShoot(float targetDistance, float wheelDiameter)
-{
+float rotationForShoot(float targetDistance, float wheelDiameter) {
 	return (targetDistance / wheelDiameter);
 }
 
-int targetPulseCount(float rotationCount, int encoderPulseCnt)
-{
+int targetPulseCount(float rotationCount, int encoderPulseCnt) {
 	return (int) ((((rotationCount * encoderPulseCnt) / TARGET_PULSE_NUMBER)
 			/ DIVISOR));
 }
 
-void SaveWheelParam(WheelParam *wP)
-{
+void SaveWheelParam(WheelParam *wP) {
 	HAL_FLASH_Unlock();
 	{
 		FLASH_EraseInitTypeDef fler;
@@ -134,8 +137,7 @@ void SaveWheelParam(WheelParam *wP)
 		HAL_FLASHEx_Erase(&fler, &perr);
 		register uint64_t *_targetAddr = (uint64_t*) (wP);
 		for (uint8_t i = 0; i <= (sizeof(WheelParam) * 2); i +=
-				sizeof(uint64_t))
-		{
+				sizeof(uint64_t)) {
 			HAL_FLASH_Program(FLASH_TYPEPROGRAM_DOUBLEWORD,
 			BACKUP_FLASH_ADDR + i, _targetAddr[i / sizeof(uint64_t)]);
 		}
@@ -149,16 +151,9 @@ void SaveWheelParam(WheelParam *wP)
  * @brief  The application entry point.
  * @retval int
  */
-int main(void)
-{
+int main(void) {
 	/* USER CODE BEGIN 1 */
-	char buf[150];
-	WheelParam wP;
-
-	//At 1st, memcpy from backup addr
-
 	memcpy(&wP, (void*) (BACKUP_FLASH_ADDR), sizeof(WheelParam));
-
 	//2nd, compare memory
 	/*if (wP.encoderPulseCount == 0xFFFFFFFF)
 	 {
@@ -168,15 +163,13 @@ int main(void)
 	 wP.wheelRadius = 0.324;
 	 SaveWheelParam(&wP);
 	 }*/
-
-	int encoderTargetCount = -1;
+	//int encoderTargetCount = -1;
 	/* USER CODE END 1 */
 
 	/* MCU Configuration--------------------------------------------------------*/
 
 	/* Reset of all peripherals, Initializes the Flash interface and the Systick. */
 	HAL_Init();
-
 	/* USER CODE BEGIN Init */
 
 	/* USER CODE END Init */
@@ -191,9 +184,12 @@ int main(void)
 	/* Initialize all configured peripherals */
 	MX_GPIO_Init();
 	MX_TIM3_Init();
-	MX_USB_Device_Init();
+	MX_SPI1_Init();
 	/* USER CODE BEGIN 2 */
 	LL_TIM_EnableIT_UPDATE(TIM3);
+
+	HAL_SPI_Receive_IT(&hspi1, (uint8_t*) &wP, sizeof(wP));
+
 	/* USER CODE END 2 */
 
 	/* Infinite loop */
@@ -202,79 +198,44 @@ int main(void)
 	encoderTargetCount = targetPulseCount(
 			rotationForShoot(wP.targetDistance, diameter(wP.wheelRadius)),
 			wP.encoderPulseCount);
-	xFlag = 0;
-	while (1)
-	{
-		switch (xFlag)
-		{
-		case 1:	//set wheel param
-			CDC_Transmit_FS("Input wheel radius.. > ", 23);
-			while (!lineFlag)
-				;
-			lineFlag = 0;
-			wP.wheelRadius = atof(rxbuf);
+
+	while (1) {
+		//HAL_SPI_Receive(&hspi1, (uint8_t*) &wP, sizeof(wP), 1000);
+		HAL_SPI_Receive_IT(&hspi1, (uint8_t*) &wP, sizeof(wP));
+
+		if (goFlag == 1) {
+			// R
+			HAL_SPI_Receive(&hspi1, (uint8_t*) &wP.wheelRadius,
+					sizeof(wP.wheelRadius), 1000);
+			//wP.wheelRadius = atof(&wP.wheelRadius);
+
+			// E
+			HAL_SPI_Receive(&hspi1, (uint8_t*) &wP.encoderPulseCount,
+					sizeof(wP.encoderPulseCount), 1000);
+			//wP.encoderPulseCount = atoi(&wP.encoderPulseCount);
+
+			// T
+			HAL_SPI_Receive(&hspi1, (uint8_t*) &wP.targetDistance,
+					sizeof(wP.targetDistance), 1000);
+			//wP.targetDistance = atof(&wP.targetDistance);
+
 			encoderTargetCount = targetPulseCount(
 					rotationForShoot(wP.targetDistance,
 							diameter(wP.wheelRadius)), wP.encoderPulseCount);
-			xFlag = 0;
-			break;
-		case 2:	//set encoder pulse count;
-			CDC_Transmit_FS("Input encoder pulse cnt.. > ", 28);
-			while (!lineFlag)
-				;
-			lineFlag = 0;
-			wP.encoderPulseCount = atoi(rxbuf);
-			if (wP.encoderPulseCount == 0)
-			{
-				break;
-			}
-			encoderTargetCount = targetPulseCount(
-					rotationForShoot(wP.targetDistance,
-							diameter(wP.wheelRadius)), wP.encoderPulseCount);
-			xFlag = 0;
-			break;
-		case 3:	//set trigger distance
-			CDC_Transmit_FS("Input trigger distance(m) > ", 28);
-			while (!lineFlag)
-				;
-			lineFlag = 0;
-			wP.targetDistance = atof(rxbuf);
-			encoderTargetCount = targetPulseCount(
-					rotationForShoot(wP.targetDistance,
-							diameter(wP.wheelRadius)), wP.encoderPulseCount);
-			xFlag = 0;
-			break;
-		case 4:
-			sprintf(txbuf, "EncoderPulseCnt= %lu\r\n"
-					"Wheel Radius= %0.5f\r\n"
-					"Trigger Distance= %0.2f\r\n"
-					"Target pulse count= %d\r\n"
-					"Auto triggering= %s\r\n", wP.encoderPulseCount,
-					wP.wheelRadius, wP.targetDistance, encoderTargetCount,
-					(bFlag == true) ? ("Started") : ("Disabled"));
-			CDC_Transmit_FS(txbuf, strlen(txbuf));
-			xFlag = 0;
-			break;
-		case 5:
-			CDC_Transmit_FS("Saving current param...\r\n", 25);
+			goFlag = 0;
 			SaveWheelParam(&wP);
-			xFlag = 0;
-			break;
-		default:
-			xFlag = 0;
 		}
+
 		/* USER CODE END WHILE */
 
 		/* USER CODE BEGIN 3 */
-		if (bFlag && A_PLS_CNT >= encoderTargetCount)
-		{
+		if (A_PLS_CNT >= encoderTargetCount) {
 			A_PLS_CNT = 0;
 			B_PLS_CNT = 0;
-			HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, SET);
+			HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, SET); // Main Interrupt
 			LL_TIM_ClearFlag_UPDATE(TIM3);
 			LL_TIM_EnableCounter(TIM3);
 			char __buf = 0xEE;
-			//CDC_Transmit_FS(&__buf, 1);
 		}
 	}
 	/* USER CODE END 3 */
@@ -284,26 +245,18 @@ int main(void)
  * @brief System Clock Configuration
  * @retval None
  */
-void SystemClock_Config(void)
-{
-	RCC_OscInitTypeDef RCC_OscInitStruct =
-	{ 0 };
-	RCC_ClkInitTypeDef RCC_ClkInitStruct =
-	{ 0 };
-	RCC_PeriphCLKInitTypeDef PeriphClkInit =
-	{ 0 };
+void SystemClock_Config(void) {
+	RCC_OscInitTypeDef RCC_OscInitStruct = { 0 };
+	RCC_ClkInitTypeDef RCC_ClkInitStruct = { 0 };
 
 	/** Configure the main internal regulator output voltage
 	 */
 	HAL_PWREx_ControlVoltageScaling(PWR_REGULATOR_VOLTAGE_SCALE1_BOOST);
-	/** Initializes the RCC Oscillators according to the specified parameters
-	 * in the RCC_OscInitTypeDef structure.
+	/** Initializes the CPU, AHB and APB busses clocks
 	 */
-	RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSI
-			| RCC_OSCILLATORTYPE_HSI48;
+	RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSI;
 	RCC_OscInitStruct.HSIState = RCC_HSI_ON;
 	RCC_OscInitStruct.HSICalibrationValue = RCC_HSICALIBRATION_DEFAULT;
-	RCC_OscInitStruct.HSI48State = RCC_HSI48_ON;
 	RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
 	RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSI;
 	RCC_OscInitStruct.PLL.PLLM = RCC_PLLM_DIV2;
@@ -311,11 +264,10 @@ void SystemClock_Config(void)
 	RCC_OscInitStruct.PLL.PLLP = RCC_PLLP_DIV2;
 	RCC_OscInitStruct.PLL.PLLQ = RCC_PLLQ_DIV2;
 	RCC_OscInitStruct.PLL.PLLR = RCC_PLLR_DIV2;
-	if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK)
-	{
+	if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK) {
 		Error_Handler();
 	}
-	/** Initializes the CPU, AHB and APB buses clocks
+	/** Initializes the CPU, AHB and APB busses clocks
 	 */
 	RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_HCLK | RCC_CLOCKTYPE_SYSCLK
 			| RCC_CLOCKTYPE_PCLK1 | RCC_CLOCKTYPE_PCLK2;
@@ -324,16 +276,7 @@ void SystemClock_Config(void)
 	RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV1;
 	RCC_ClkInitStruct.APB2CLKDivider = RCC_HCLK_DIV1;
 
-	if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_4) != HAL_OK)
-	{
-		Error_Handler();
-	}
-	/** Initializes the peripherals clocks
-	 */
-	PeriphClkInit.PeriphClockSelection = RCC_PERIPHCLK_USB;
-	PeriphClkInit.UsbClockSelection = RCC_USBCLKSOURCE_HSI48;
-	if (HAL_RCCEx_PeriphCLKConfig(&PeriphClkInit) != HAL_OK)
-	{
+	if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_8) != HAL_OK) {
 		Error_Handler();
 	}
 }
@@ -346,8 +289,7 @@ void SystemClock_Config(void)
  * @brief  This function is executed in case of error occurrence.
  * @retval None
  */
-void Error_Handler(void)
-{
+void Error_Handler(void) {
 	/* USER CODE BEGIN Error_Handler_Debug */
 	/* User can add his own implementation to report the HAL error return state */
 

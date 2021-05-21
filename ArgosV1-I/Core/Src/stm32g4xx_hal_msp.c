@@ -74,7 +74,7 @@ void HAL_MspInit(void)
 
   /** Disable the internal Pull-Up in Dead Battery pins of UCPD peripheral
   */
-  HAL_PWREx_DisableUCPDDeadBattery();
+  LL_PWR_DisableDeadBatteryPD();
 
   /* USER CODE BEGIN MspInit 1 */
 

@@ -130,7 +130,7 @@ __RAM_FUNC HAL_StatusTypeDef HAL_FLASHEx_DisableRunPowerDown(void)
   */
 __RAM_FUNC HAL_StatusTypeDef HAL_FLASHEx_OB_DBankConfig(uint32_t DBankConfig)
 {
-  uint32_t count, reg;
+  register uint32_t count, reg;
   HAL_StatusTypeDef status = HAL_ERROR;
 
   /* Process Locked */
