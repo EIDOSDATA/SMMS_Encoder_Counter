@@ -30,18 +30,21 @@
 
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
-typedef struct _paramType {
-	float wheelRadius; // 1
-	uint32_t encoderPulseCount; // 2
-	float targetDistance; // 3
-} __attribute__((aligned(1), packed)) WheelParam;
+typedef struct wheel_param
+{
+	float car_w_rad; // Car Wheel Radius >> 0.275(m)
+	float tgt_dist; // Target Distance (Camera Action) >> 5.0(m)
+	uint32_t one_rot_enc_pls; // 1 rotation encoder pulse value >> 2000
+} __attribute__((aligned(1), packed)) wheel_param_t;
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-#define TARGET_PULSE_NUMBER           1
+#define TARGET_PULSE_NUMBER 1
 
-#define DIVISOR                       1
+#define DIVISOR 1
+
+#define MAX_BUFLEN 1024
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -62,21 +65,28 @@ TIM_HandleTypeDef htim1;
 UART_HandleTypeDef huart2;
 
 /* USER CODE BEGIN PV */
-#define MAX_BUFLEN 1024 // used
-char buf[MAX_BUFLEN]; // used
-int bufHead = 0, bufTail = 0; // used
-uint8_t tmpbuf; // UART interrupt buf used
+// STDIO BUF, Head, Tail
+char stdio_buf[MAX_BUFLEN]; // used
+int stdio_buf_head = 0, stdio_buf_tail = 0; // used
 
-char mainBuf[20] = { 0 }; // data input buf used
-char getdata; // get char used
+// UART Command
+char uart_rx_buf[20] =
+{ 0 }; // data input buf used
+char uart_rx_cmd; // get char used
+uint8_t uart_it_buf; // UART interrupt buf used
 
-uint8_t cameraflag = 0; // Camera used
-uint8_t uartflag = 0; // Uart Action(Camera ADC) used
-uint8_t confflag = 0; // Configuration Mode used
+// Flag
+uint8_t cam_f = 0; // Camera used
+uint8_t uart_f = 0; // Uart Action(Camera ADC) used
+uint8_t conf_mod_f = 0; // Configuration Mode used
 
-WheelParam wP;
-int encoderTargetCount = -1;
-int adcValue[3]; // ADC DATA SAVE
+// Encoder struct, encoder value
+wheel_param_t wp;
+int enc_val_for_photo_dist = -1;
+
+// CDS Sensor
+int adc_val[3]; // ADC DATA SAVE
+
 HAL_StatusTypeDef result;
 /* USER CODE END PV */
 
@@ -96,28 +106,34 @@ static void MX_NVIC_Init(void);
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
 
-float diameter(float radius) {
+float diameter(float radius)
+{
 	return (2 * 3.1415 * radius);
 }
 
-float rotationForShoot(float targetDistance, float wheelDiameter) {
-	return (targetDistance / wheelDiameter);
+float n_of_rot_to_photo_dist(float tgt_dist, float w_diameter)
+{
+	return (tgt_dist / w_diameter);
 }
 
-int targetPulseCount(float rotationCount, int encoderPulseCnt) {
-	return (int) ((((rotationCount * encoderPulseCnt) / TARGET_PULSE_NUMBER)
+int tgt_pls_cnt(float w_turn_enc_pls, int enc_pls_f)
+{
+	return (int) ((((w_turn_enc_pls * enc_pls_f) / TARGET_PULSE_NUMBER)
 			/ DIVISOR));
 }
 
-void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart) {
-	if (huart->Instance == huart2.Instance) {
-		HAL_UART_Receive_IT(&huart2, &tmpbuf, 1);
-		buf[bufTail] = huart->pRxBuffPtr[0];
-		bufTail++;
-		bufTail %= MAX_BUFLEN;
+void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
+{
+	if (huart->Instance == huart2.Instance)
+	{
+		HAL_UART_Receive_IT(&huart2, &uart_it_buf, 1);
+		stdio_buf[stdio_buf_tail] = huart->pRxBuffPtr[0];
+		stdio_buf_tail++;
+		stdio_buf_tail %= MAX_BUFLEN;
 	}
 } // END OF UART2
-int _write(int file, unsigned char *p, int len) {
+int _write(int file, unsigned char *p, int len)
+{
 	HAL_UART_Transmit(&huart2, p, len, 100);
 	return len;
 }
@@ -128,17 +144,22 @@ int _write(int file, unsigned char *p, int len) {
  return ch;
  }
  */
-int __io_getchar() {
+int __io_getchar()
+{
 	register int ret;
 
-	__retry: if (bufHead != bufTail) {
-		ret = buf[bufHead];
-		if (ret == '\r' || ret == '\n') {
+	__retry: if (stdio_buf_head != stdio_buf_tail)
+	{
+		ret = stdio_buf[stdio_buf_head];
+		if (ret == '\r' || ret == '\n')
+		{
 			ret = '\n';
 		}
-		bufHead++;
-		bufHead %= MAX_BUFLEN;
-	} else {
+		stdio_buf_head++;
+		stdio_buf_head %= MAX_BUFLEN;
+	}
+	else
+	{
 		goto __retry;
 		//return -1;
 	}
@@ -150,15 +171,17 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin) // GPIO INTERRUPT
 	if (GPIO_Pin == GPIO_PIN_6) //
 	{
 		HAL_GPIO_WritePin(MARK2_GPIO_Port, MARK2_Pin, SET);
-	} else if (GPIO_Pin == ENCODER_INT_Pin) // ENCODER INTERRUPT
+	}
+	else if (GPIO_Pin == ENCODER_INT_Pin) // ENCODER INTERRUPT
 	{
-		HAL_ADC_Start_DMA(&hadc1, adcValue, 3);
-		for (int i = 0; i < 3; i++) { // ADC data save
+		HAL_ADC_Start_DMA(&hadc1, (uint32_t*) adc_val, 3);
+		for (int i = 0; i < 3; i++)
+		{ // ADC data save
 			HAL_DMA_PollForTransfer(&hdma_adc1, HAL_DMA_FULL_TRANSFER, 100); // ADC DATA GET 3
 		}
 		HAL_ADC_Stop_DMA(&hadc1);
-		printf("light value : ADC = %04d   %04d   %04d\r\n", adcValue[0],
-				adcValue[1], adcValue[2]);
+		printf("light value : ADC = %04d   %04d   %04d\r\n", adc_val[0],
+				adc_val[1], adc_val[2]);
 	}
 }
 /* USER CODE END 0 */
@@ -167,7 +190,8 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin) // GPIO INTERRUPT
  * @brief  The application entry point.
  * @retval int
  */
-int main(void) {
+int main(void)
+{
 	/* USER CODE BEGIN 1 */
 
 	/* USER CODE END 1 */
@@ -199,116 +223,122 @@ int main(void) {
 	/* Initialize interrupts */
 	MX_NVIC_Init();
 	/* USER CODE BEGIN 2 */
-	HAL_UART_Receive_IT(&huart2, &tmpbuf, 1);
+	HAL_UART_Receive_IT(&huart2, &uart_it_buf, 1);
 	printf(
 			"Hello Commander! Activate Camera : s   Car Configuration : c\r\n\r\n");
-	encoderTargetCount = targetPulseCount(
-			rotationForShoot(wP.targetDistance, diameter(wP.wheelRadius)),
-			wP.encoderPulseCount);
+	enc_val_for_photo_dist = tgt_pls_cnt(
+			n_of_rot_to_photo_dist(wp.tgt_dist, diameter(wp.car_w_rad)),
+			wp.one_rot_enc_pls);
 
 	/* USER CODE END 2 */
 
 	/* Infinite loop */
 	/* USER CODE BEGIN WHILE */
-	while (1) {
+	while (1)
+	{
 		/* USER CODE END WHILE */
 
 		/* USER CODE BEGIN 3 */
-		HAL_UART_Receive_IT(&huart2, &tmpbuf, 1);
-		getdata = getchar();
+		HAL_UART_Receive_IT(&huart2, &uart_it_buf, 1);
+		uart_rx_cmd = getchar();
 
-		if ((getdata == 's' || getdata == 'S') && confflag == 0) { // UART INPUT 'S'
+		if ((uart_rx_cmd == 's' || uart_rx_cmd == 'S') && conf_mod_f == 0)
+		{ // UART INPUT 'S'
 			printf("Camera activated\r\n");
 			HAL_GPIO_WritePin(AUTOFOCUS_GPIO_Port, AUTOFOCUS_Pin, SET);
 			HAL_GPIO_WritePin(SHUTTER_GPIO_Port, SHUTTER_Pin, SET);
 			HAL_GPIO_WritePin(MARK2_GPIO_Port, MARK2_Pin, RESET);
-			cameraflag = 1;
-			uartflag = 1;
-			if (cameraflag == 1) { // Camera Action
+			cam_f = 1;
+			uart_f = 1;
+			if (cam_f == 1)
+			{ // Camera Action
 				HAL_Delay(10);
 				HAL_GPIO_WritePin(AUTOFOCUS_GPIO_Port, AUTOFOCUS_Pin, RESET);
 				HAL_GPIO_WritePin(SHUTTER_GPIO_Port, SHUTTER_Pin, RESET);
-				cameraflag = 0;
+				cam_f = 0;
 			}
-			if (uartflag == 1) {
-				HAL_ADC_Start_DMA(&hadc1, adcValue, 3);
-				for (int i = 0; i < 3; i++) { // ADC data save
+			if (uart_f == 1)
+			{
+				HAL_ADC_Start_DMA(&hadc1, (uint32_t*) adc_val, 3);
+				for (int i = 0; i < 3; i++)
+				{ // ADC data save
 					HAL_DMA_PollForTransfer(&hdma_adc1, HAL_DMA_FULL_TRANSFER,
 							100); // ADC DATA GET 3
 				}
 				HAL_ADC_Stop_DMA(&hadc1);
-				printf("light value : ADC = %04d   %04d   %04d\r\n",
-						adcValue[0], adcValue[1], adcValue[2]);
-				uartflag = 0;
+				printf("light value : ADC = %04d   %04d   %04d\r\n", adc_val[0],
+						adc_val[1], adc_val[2]);
+				uart_f = 0;
 			}
 		}
-		if ((getdata == 'c' || getdata == 'C') && confflag == 0) {
+		if ((uart_rx_cmd == 'c' || uart_rx_cmd == 'C') && conf_mod_f == 0)
+		{
 			printf("Car configuration activated. Plz input data\r\n");
 			printf(
 					"R.Radius\r\nE.Encoder pulse count\r\nT.Target Distance\r\nF.Forwarding Data\r\nV.View\r\nx.EXIT\r\n");
-			confflag = 1;
+			conf_mod_f = 1;
 		}
 		// Command Mode Index
-		if (confflag == 1) {
-			switch (getdata) { // UART INPUT 'C' // Configuration Mode
+		if (conf_mod_f == 1)
+		{
+			switch (uart_rx_cmd)
+			{ // UART INPUT 'C' // Configuration Mode
 			case 'r': // Car radius
 			case 'R':
 				printf("\r\nRadius data input\r\n");
-				gets(mainBuf); // Read Data
-				printf("Input Data : %s / ArrSize : %d\r\n", mainBuf,
-						sizeof(wP)); // Print Data
-				wP.wheelRadius = atof(mainBuf);
-				encoderTargetCount = targetPulseCount(
-						rotationForShoot(wP.targetDistance,
-								diameter(wP.wheelRadius)),
-						wP.encoderPulseCount);
+				gets(uart_rx_buf); // Read Data
+				printf("Input Data : %s / ArrSize : %d\r\n", uart_rx_buf,
+						sizeof(wp)); // Print Data
+				wp.car_w_rad = atof(uart_rx_buf);
+				enc_val_for_photo_dist = tgt_pls_cnt(
+						n_of_rot_to_photo_dist(wp.tgt_dist,
+								diameter(wp.car_w_rad)), wp.one_rot_enc_pls);
 				break;
 			case 'e': // Encoder pluse
 			case 'E':
 				printf("\r\nEncoder pulse count input\r\n");
-				gets(mainBuf); // Read Data
-				printf("Input Data : %s / ArrSize : %d\r\n", mainBuf,
-						sizeof(wP)); // Print Data
-				wP.encoderPulseCount = atoi(mainBuf);
-				if (wP.encoderPulseCount == 0) {
+				gets(uart_rx_buf); // Read Data
+				printf("Input Data : %s / ArrSize : %d\r\n", uart_rx_buf,
+						sizeof(wp)); // Print Data
+				wp.one_rot_enc_pls = atoi(uart_rx_buf);
+				if (wp.one_rot_enc_pls == 0)
+				{
 					break;
 				}
-				encoderTargetCount = targetPulseCount(
-						rotationForShoot(wP.targetDistance,
-								diameter(wP.wheelRadius)),
-						wP.encoderPulseCount);
+				enc_val_for_photo_dist = tgt_pls_cnt(
+						n_of_rot_to_photo_dist(wp.tgt_dist,
+								diameter(wp.car_w_rad)), wp.one_rot_enc_pls);
 				break;
 			case 't': // Target distance
 			case 'T':
 				printf("\r\nTarget Distance input\r\n");
-				gets(mainBuf); // Read Data
-				printf("Input Data : %s / ArrSize : %d\r\n", mainBuf,
-						sizeof(wP)); // Print Data
-				wP.targetDistance = atof(mainBuf);
-				encoderTargetCount = targetPulseCount(
-						rotationForShoot(wP.targetDistance,
-								diameter(wP.wheelRadius)),
-						wP.encoderPulseCount);
+				gets(uart_rx_buf); // Read Data
+				printf("Input Data : %s / ArrSize : %d\r\n", uart_rx_buf,
+						sizeof(wp)); // Print Data
+				wp.tgt_dist = atof(uart_rx_buf);
+				enc_val_for_photo_dist = tgt_pls_cnt(
+						n_of_rot_to_photo_dist(wp.tgt_dist,
+								diameter(wp.car_w_rad)), wp.one_rot_enc_pls);
 				break;
 			case 'f': // Data Save
 			case 'F':
 				printf("\r\nForwarding data\r\n");
-				HAL_SPI_Transmit(&hspi1, (uint8_t*) &wP, sizeof(wP), -1);
+				HAL_SPI_Transmit(&hspi1, (uint8_t*) &wp, sizeof(wp), -1);
 				printf("Activate Camera : s   Car Configuration : c\r\n\r\n");
-				confflag = 0;
+				conf_mod_f = 0;
 				break;
 			case 'v': // Data View
 			case 'V':
 				printf(
 						"\r\nEncoderPulseCnt = %lu\r\nWheel Radius = %0.5f\r\nTrigger Distance = %0.2f\r\nTarget pulse count = %d\r\n",
-						wP.encoderPulseCount, wP.wheelRadius, wP.targetDistance,
-						encoderTargetCount);
+						wp.one_rot_enc_pls, wp.car_w_rad, wp.tgt_dist,
+						enc_val_for_photo_dist);
 				break;
 			case 'x': // EXIT
 			case 'X':
 				printf("\r\nINPUT MODE CLOSE\r\n");
 				printf("Activate Camera : s   Car Configuration : c\r\n\r\n");
-				confflag = 0;
+				conf_mod_f = 0;
 				break;
 			} // End of Switch Case
 		} // End of If
@@ -320,9 +350,12 @@ int main(void) {
  * @brief System Clock Configuration
  * @retval None
  */
-void SystemClock_Config(void) {
-	RCC_OscInitTypeDef RCC_OscInitStruct = { 0 };
-	RCC_ClkInitTypeDef RCC_ClkInitStruct = { 0 };
+void SystemClock_Config(void)
+{
+	RCC_OscInitTypeDef RCC_OscInitStruct =
+	{ 0 };
+	RCC_ClkInitTypeDef RCC_ClkInitStruct =
+	{ 0 };
 
 	/** Configure the main internal regulator output voltage
 	 */
@@ -341,7 +374,8 @@ void SystemClock_Config(void) {
 	RCC_OscInitStruct.PLL.PLLP = RCC_PLLP_DIV4;
 	RCC_OscInitStruct.PLL.PLLQ = 2;
 	RCC_OscInitStruct.PLL.PLLR = 2;
-	if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK) {
+	if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK)
+	{
 		Error_Handler();
 	}
 	/** Initializes the CPU, AHB and APB buses clocks
@@ -353,7 +387,8 @@ void SystemClock_Config(void) {
 	RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV2;
 	RCC_ClkInitStruct.APB2CLKDivider = RCC_HCLK_DIV1;
 
-	if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_2) != HAL_OK) {
+	if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_2) != HAL_OK)
+	{
 		Error_Handler();
 	}
 }
@@ -362,7 +397,8 @@ void SystemClock_Config(void) {
  * @brief NVIC Configuration.
  * @retval None
  */
-static void MX_NVIC_Init(void) {
+static void MX_NVIC_Init(void)
+{
 	/* USART2_IRQn interrupt configuration */
 	HAL_NVIC_SetPriority(USART2_IRQn, 0, 0);
 	HAL_NVIC_EnableIRQ(USART2_IRQn);
@@ -376,13 +412,15 @@ static void MX_NVIC_Init(void) {
  * @param None
  * @retval None
  */
-static void MX_ADC1_Init(void) {
+static void MX_ADC1_Init(void)
+{
 
 	/* USER CODE BEGIN ADC1_Init 0 */
 
 	/* USER CODE END ADC1_Init 0 */
 
-	ADC_ChannelConfTypeDef sConfig = { 0 };
+	ADC_ChannelConfTypeDef sConfig =
+	{ 0 };
 
 	/* USER CODE BEGIN ADC1_Init 1 */
 
@@ -401,7 +439,8 @@ static void MX_ADC1_Init(void) {
 	hadc1.Init.NbrOfConversion = 3;
 	hadc1.Init.DMAContinuousRequests = DISABLE;
 	hadc1.Init.EOCSelection = ADC_EOC_SINGLE_CONV;
-	if (HAL_ADC_Init(&hadc1) != HAL_OK) {
+	if (HAL_ADC_Init(&hadc1) != HAL_OK)
+	{
 		Error_Handler();
 	}
 	/** Configure for the selected ADC regular channel its corresponding rank in the sequencer and its sample time.
@@ -409,21 +448,24 @@ static void MX_ADC1_Init(void) {
 	sConfig.Channel = ADC_CHANNEL_10;
 	sConfig.Rank = 1;
 	sConfig.SamplingTime = ADC_SAMPLETIME_3CYCLES;
-	if (HAL_ADC_ConfigChannel(&hadc1, &sConfig) != HAL_OK) {
+	if (HAL_ADC_ConfigChannel(&hadc1, &sConfig) != HAL_OK)
+	{
 		Error_Handler();
 	}
 	/** Configure for the selected ADC regular channel its corresponding rank in the sequencer and its sample time.
 	 */
 	sConfig.Channel = ADC_CHANNEL_11;
 	sConfig.Rank = 2;
-	if (HAL_ADC_ConfigChannel(&hadc1, &sConfig) != HAL_OK) {
+	if (HAL_ADC_ConfigChannel(&hadc1, &sConfig) != HAL_OK)
+	{
 		Error_Handler();
 	}
 	/** Configure for the selected ADC regular channel its corresponding rank in the sequencer and its sample time.
 	 */
 	sConfig.Channel = ADC_CHANNEL_12;
 	sConfig.Rank = 3;
-	if (HAL_ADC_ConfigChannel(&hadc1, &sConfig) != HAL_OK) {
+	if (HAL_ADC_ConfigChannel(&hadc1, &sConfig) != HAL_OK)
+	{
 		Error_Handler();
 	}
 	/* USER CODE BEGIN ADC1_Init 2 */
@@ -437,7 +479,8 @@ static void MX_ADC1_Init(void) {
  * @param None
  * @retval None
  */
-static void MX_SPI1_Init(void) {
+static void MX_SPI1_Init(void)
+{
 
 	/* USER CODE BEGIN SPI1_Init 0 */
 
@@ -459,7 +502,8 @@ static void MX_SPI1_Init(void) {
 	hspi1.Init.TIMode = SPI_TIMODE_DISABLE;
 	hspi1.Init.CRCCalculation = SPI_CRCCALCULATION_DISABLE;
 	hspi1.Init.CRCPolynomial = 10;
-	if (HAL_SPI_Init(&hspi1) != HAL_OK) {
+	if (HAL_SPI_Init(&hspi1) != HAL_OK)
+	{
 		Error_Handler();
 	}
 	/* USER CODE BEGIN SPI1_Init 2 */
@@ -473,14 +517,17 @@ static void MX_SPI1_Init(void) {
  * @param None
  * @retval None
  */
-static void MX_TIM1_Init(void) {
+static void MX_TIM1_Init(void)
+{
 
 	/* USER CODE BEGIN TIM1_Init 0 */
 
 	/* USER CODE END TIM1_Init 0 */
 
-	TIM_ClockConfigTypeDef sClockSourceConfig = { 0 };
-	TIM_MasterConfigTypeDef sMasterConfig = { 0 };
+	TIM_ClockConfigTypeDef sClockSourceConfig =
+	{ 0 };
+	TIM_MasterConfigTypeDef sMasterConfig =
+	{ 0 };
 
 	/* USER CODE BEGIN TIM1_Init 1 */
 
@@ -492,17 +539,19 @@ static void MX_TIM1_Init(void) {
 	htim1.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
 	htim1.Init.RepetitionCounter = 0;
 	htim1.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
-	if (HAL_TIM_Base_Init(&htim1) != HAL_OK) {
+	if (HAL_TIM_Base_Init(&htim1) != HAL_OK)
+	{
 		Error_Handler();
 	}
 	sClockSourceConfig.ClockSource = TIM_CLOCKSOURCE_INTERNAL;
-	if (HAL_TIM_ConfigClockSource(&htim1, &sClockSourceConfig) != HAL_OK) {
+	if (HAL_TIM_ConfigClockSource(&htim1, &sClockSourceConfig) != HAL_OK)
+	{
 		Error_Handler();
 	}
 	sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
 	sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
-	if (HAL_TIMEx_MasterConfigSynchronization(&htim1, &sMasterConfig)
-			!= HAL_OK) {
+	if (HAL_TIMEx_MasterConfigSynchronization(&htim1, &sMasterConfig) != HAL_OK)
+	{
 		Error_Handler();
 	}
 	/* USER CODE BEGIN TIM1_Init 2 */
@@ -516,7 +565,8 @@ static void MX_TIM1_Init(void) {
  * @param None
  * @retval None
  */
-static void MX_USART2_UART_Init(void) {
+static void MX_USART2_UART_Init(void)
+{
 
 	/* USER CODE BEGIN USART2_Init 0 */
 
@@ -533,7 +583,8 @@ static void MX_USART2_UART_Init(void) {
 	huart2.Init.Mode = UART_MODE_TX_RX;
 	huart2.Init.HwFlowCtl = UART_HWCONTROL_NONE;
 	huart2.Init.OverSampling = UART_OVERSAMPLING_16;
-	if (HAL_UART_Init(&huart2) != HAL_OK) {
+	if (HAL_UART_Init(&huart2) != HAL_OK)
+	{
 		Error_Handler();
 	}
 	/* USER CODE BEGIN USART2_Init 2 */
@@ -545,7 +596,8 @@ static void MX_USART2_UART_Init(void) {
 /**
  * Enable DMA controller clock
  */
-static void MX_DMA_Init(void) {
+static void MX_DMA_Init(void)
+{
 
 	/* DMA controller clock enable */
 	__HAL_RCC_DMA2_CLK_ENABLE();
@@ -568,8 +620,10 @@ static void MX_DMA_Init(void) {
  * @param None
  * @retval None
  */
-static void MX_GPIO_Init(void) {
-	GPIO_InitTypeDef GPIO_InitStruct = { 0 };
+static void MX_GPIO_Init(void)
+{
+	GPIO_InitTypeDef GPIO_InitStruct =
+	{ 0 };
 
 	/* GPIO Ports Clock Enable */
 	__HAL_RCC_GPIOC_CLK_ENABLE();
@@ -579,8 +633,7 @@ static void MX_GPIO_Init(void) {
 
 	/*Configure GPIO pin Output Level */
 	HAL_GPIO_WritePin(GPIOB,
-			MARK2_Pin | MARK3_Pin | AUTOFOCUS_Pin | SHUTTER_Pin,
-			GPIO_PIN_RESET);
+	MARK2_Pin | MARK3_Pin | AUTOFOCUS_Pin | SHUTTER_Pin, GPIO_PIN_RESET);
 
 	/*Configure GPIO pin : B1_Pin */
 	GPIO_InitStruct.Pin = B1_Pin;
@@ -628,7 +681,8 @@ static void MX_GPIO_Init(void) {
  * @brief  This function is executed in case of error occurrence.
  * @retval None
  */
-void Error_Handler(void) {
+void Error_Handler(void)
+{
 	/* USER CODE BEGIN Error_Handler_Debug */
 	/* User can add his own implementation to report the HAL error return state */
 
